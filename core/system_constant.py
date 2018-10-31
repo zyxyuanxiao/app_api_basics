@@ -1,0 +1,2 @@
+
+DEFAULT_METHODS = ["GET", "POST"]
