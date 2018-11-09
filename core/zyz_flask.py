@@ -9,10 +9,21 @@ from flask import Flask, Blueprint,cli
 from flask.helpers import get_debug_flag, _PackageBoundObject, _endpoint_from_view_func
 from flask.templating import _default_template_ctx_processor
 
-from werkzeug.routing import Rule,Map
+from werkzeug.routing import Rule, Map, MapAdapter,RequestSlash, RequestRedirect, RequestAliasRedirect, _simple_rule_re
+from werkzeug.urls import url_quote, url_join
 from werkzeug.datastructures import ImmutableDict
+from werkzeug._internal import _encode_idna, _get_environ
+from werkzeug._compat import to_unicode, string_types, wsgi_decoding_dance
+from werkzeug.exceptions import BadHost, NotFound, MethodNotAllowed
 
 from core.system_constant import DEFAULT_METHODS
+
+
+import logging.config
+
+logging.config.fileConfig('configs/logging.conf')
+logger = logging.getLogger()
+
 
 # 自定义flask蓝图,给所有路由增加'methods': ['GET', 'POST']参数。不用每个都写
 class ZyzBlueprint(Blueprint):
@@ -215,7 +226,7 @@ class ZyzFlask(Flask):
             # 设置 request_id
             request.trace_id = str(uuid.uuid4())
             # 设置 app version
-            request.version = self.get_version(request)
+            request.version = get_version(request)
 
             return self.url_map.bind_to_environ(request.environ, request=request,
                                                 version_dict=self.version_dict,
@@ -226,13 +237,6 @@ class ZyzFlask(Flask):
                 script_name=self.config['APPLICATION_ROOT'] or '/',
                 url_scheme=self.config['PREFERRED_URL_SCHEME']
             )
-
-    def get_version(self,request):
-        try:
-            return request.version
-        except AttributeError:
-            pass
-        return request.args.get('version')
 
     def add_url_rule(self, rule, endpoint=None, view_func=None, **options):
         if endpoint is None:
@@ -284,6 +288,158 @@ class ZyzFlask(Flask):
 
             self.view_functions[endpoint] = view_func
 
-class ZyzMap(Map):
-    pass
 
+class ZyzMap(Map):
+    def bind(self, server_name, script_name=None, subdomain=None,
+             url_scheme='http', default_method='GET', path_info=None,
+             query_args=None, request=None, version_dict=None):
+        server_name = server_name.lower()
+        if self.host_matching:
+            if subdomain is not None:
+                raise RuntimeError('host matching enabled and a '
+                                   'subdomain was provided')
+            elif subdomain is None:
+                subdomain = self.default_subdomain
+            if script_name is None:
+                script_name = '/'
+            try:
+                server_name = _encode_idna(server_name)
+            except UnicodeError:
+                raise BadHost()
+            return ZyzMapAdapter(self,server_name, script_name, subdomain,
+                                 url_scheme, path_info, default_method,
+                                 query_args, request, version_dict)
+
+    def bind_to_environ(self, environ, server_name=None, subdomain=None, request=None, version_dict=None):
+        environ = _get_environ(environ)
+
+        if 'HTTP_HOST' in environ:
+            wsgi_server_name = environ['HTTP_HOST']
+
+            if environ['wsgi.url_scheme'] == 'http' and wsgi_server_name.endswith(':80'):
+                wsgi_server_name = wsgi_server_name[:-3]
+            elif environ['wsgi.url_scheme'] == 'https' and wsgi_server_name.endswith(':443'):
+                wsgi_server_name = wsgi_server_name[:-4]
+        else:
+            wsgi_server_name = environ['SERVER_NAME']
+
+            if (environ['wsgi.url_scheme'],environ['SERVER_PORT']) not in (('https','443'),('http','80')):
+                wsgi_server_name += ':' + environ['SERVER_PORT']
+
+        wsgi_server_name = wsgi_server_name.lower()
+
+        if server_name is None:
+            server_name = wsgi_server_name
+        else:
+            server_name = server_name.lower()
+
+        if subdomain is None and not self.host_matching:
+            cur_server_name = wsgi_server_name.split('.')
+            real_server_name = server_name.split('.')
+            offset = -len(real_server_name)
+            if cur_server_name[offset:] != real_server_name:
+                subdomain = '<invalid>'
+            else:
+                subdomain = '.'.join(filter(None, cur_server_name[:offset]))
+        def _get_wsgi_string(name):
+            val = environ.get(name)
+            if val is not None:
+                return wsgi_decoding_dance(val, self.charset)
+
+        script_name = _get_wsgi_string('SCRIPT_NAME')
+        path_info = _get_wsgi_string('PATH_INFO')
+        query_args = _get_wsgi_string('QUERY_STRING')
+        return ZyzMap.bind(self, server_name, script_name,
+                              subdomain, environ['wsgi.url_scheme'],
+                              environ['REQUEST_METHOD'], path_info,
+                              query_args=query_args, request=request, version_dict=version_dict)
+
+class ZyzMapAdapter(MapAdapter):
+    def __init__(self, map, server_name, script_name, subdomain,
+                 url_scheme, path_info, default_method, query_args=None,
+                 request = None, version_dict = None):
+        self.request = request
+        self.version_dict = version_dict if version_dict is not None else {}
+        super().__init__(map, server_name, script_name, subdomain, url_scheme,
+                         path_info, default_method, query_args)
+    def match(self, path_info=None, method=None, return_rule=False,
+              query_args=None):
+        self.map.update()
+        if path_info is None:
+            path_info = self.path_info
+        else:
+            path_info = to_unicode(path_info, self.map.charset)
+        if query_args is None:
+            query_args = self.query_args
+        method = (method or self.default_method).upper()
+
+        path = u'%s|%s' % (
+            self.map.host_matching and self.server_name or self.subdomain,
+            path_info and '/%s' % path_info.lstrip('/')
+        )
+
+        have_match_for = set()
+        for rule in self.map.rules:
+            try:
+                rv = rule.match(path)
+            except RequestSlash:
+                raise RequestRedirect(self.make_redirect_url(
+                    url_quote(path_info, self.map.charset,
+                              safe='/:|+') + '/', query_args))
+            except RequestAliasRedirect as e:
+                raise RequestRedirect(self.make_alias_redirect_url(
+                    path, rule.endpint, e.matched_values, method,query_args))
+            if rv is None:
+                continue
+            if rule.methods is not None and method not in rule.methods:
+                have_match_for.update(rule.methods)
+                continue
+
+            # 确定版本
+            version = get_version(self.request)
+            if self.request and version:
+                if not isinstance(rule.version, list) or not rule.version:
+                    rule.version = list()
+
+                version_list = self.version_dict.get(rule.rule)
+
+                if len(rule.version) == 0 \
+                        and version_list is not None \
+                        and version in version_list:
+                    continue
+                elif len(rule.version) != 0 and version not in rule.version:
+                    continue
+            self.request.rule_version = rule.version
+
+            if self.map.redirect_defaults:
+                redirect_url = self.get_default_redirect(rule, method, rv, query_args)
+
+                if redirect_url is not None:
+                    if isinstance(rule.redirect_to,string_types):
+                        def _handle_match(match):
+                            value = rv[match.group(1)]
+                            return rule._converters[match.group(1)].to_url(value)
+                        redirect_url =_simple_rule_re.sub(_handle_match,rule.redirect_to)
+                else:
+                    redirect_url = rule.redirect_to(self, **rv)
+                raise RequestRedirect(str(url_join('%s://%s%s%s' % (
+                    self.url_scheme or 'http',
+                    self.subdomain and self.subdomain + '.' or '',
+                    self.server_name,
+                    self.script_name
+                ),redirect_url)))
+
+            if return_rule:
+                return rule, rv
+            else:
+                return rule.endpint, rv
+        if have_match_for:
+            raise MethodNotAllowed(valid_methods=list(have_match_for))
+        raise NotFound()
+
+def get_version(request):
+    try:
+        return request.version
+    except AttributeError:
+        pass
+    return request.args.get('version')
