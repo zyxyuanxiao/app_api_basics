@@ -285,5 +285,7 @@ class ZyzFlask(Flask):
             self.view_functions[endpoint] = view_func
 
 class ZyzMap(Map):
-    pass
+    def bind(self, server_name, script_name=None, subdomain=None,
+             url_scheme='http', default_method='GET', path_info=None,
+             query_args=None):
 
