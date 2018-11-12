@@ -292,7 +292,6 @@ class ZyzFlask(Flask):
 class ZyzMap(Map):
     def bind(self, server_name, script_name=None, subdomain=None,
              url_scheme='http', default_method='GET', path_info=None,
-<<<<<<< HEAD
              query_args=None, request=None, version_dict=None):
         server_name = server_name.lower()
         if self.host_matching:
@@ -378,9 +377,6 @@ class ZyzMapAdapter(MapAdapter):
             self.map.host_matching and self.server_name or self.subdomain,
             path_info and '/%s' % path_info.lstrip('/')
         )
-=======
-             query_args=None):
->>>>>>> develop
 
         have_match_for = set()
         for rule in self.map.rules:
