@@ -233,4 +233,3 @@ class TimedRoeatingFileHandler_MP(TimedRotatingFileHandler, FileHandler_MP):
             raise
         except:
             self.handleError(record)
-# 测试一下
