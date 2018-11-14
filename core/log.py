@@ -3,14 +3,13 @@ import re
 import time
 import fcntl
 import shutil
-import logging.config
 
 from stat import ST_MTIME
-from logging import getLogger, FileHandler, StreamHandler
+from logging import getLogger, FileHandler, StreamHandler, config
 from logging.handlers import TimedRotatingFileHandler, RotatingFileHandler
 
 
-logging.config.fileConfig('configs/logging.conf')
+config.fileConfig('configs/logging.conf')
 logger = getLogger()
 
 

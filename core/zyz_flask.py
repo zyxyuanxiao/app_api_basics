@@ -19,21 +19,26 @@ from werkzeug.exceptions import BadHost, NotFound, MethodNotAllowed
 from core.system_constant import DEFAULT_METHODS
 
 
-import logging.config
-
-logging.config.fileConfig('configs/logging.conf')
-logger = logging.getLogger()
-
-
 # 自定义flask蓝图,给所有路由增加'methods': ['GET', 'POST']参数。不用每个都写
 class ZyzBlueprint(Blueprint):
+    def __init__(self, name, import_name, default_methods=DEFAULT_METHODS,
+                 static_folder=None,static_url_path=None, template_folder=None,
+                 url_prefix=None, subdomain=None, url_defaults=None, root_path=None):
+
+        super().__init__(name, import_name, static_folder=static_folder,
+                         static_url_path=static_url_path, template_folder=template_folder,
+                         url_prefix=url_prefix, subdomain=subdomain, url_defaults=url_defaults,
+                         root_path=root_path)
+
+        self.default_methods = default_methods
+
     # 装饰器
     def route(self,rule,**options):
 
         # 设置默认请求
         methods = options.get('methods')
         if not methods:
-            options['methods'] = DEFAULT_METHODS
+            options['methods'] = self.default_methods
 
         # 给函数名增加版本号，多个版本使用相同函数名时，蓝图存储监听时可以区分。
         def decorator(f):
