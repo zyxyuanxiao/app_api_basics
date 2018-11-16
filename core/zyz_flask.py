@@ -448,3 +448,6 @@ def get_version(request):
     except AttributeError:
         pass
     return request.args.get('version')
+
+app = ZyzFlask(__name__)
+app.config.from_object()
