@@ -16,12 +16,11 @@ from werkzeug._internal import _encode_idna, _get_environ
 from werkzeug._compat import to_unicode, string_types, wsgi_decoding_dance
 from werkzeug.exceptions import BadHost, NotFound, MethodNotAllowed
 
-from core.system_constant import DEFAULT_METHODS
 
 
 # 自定义flask蓝图,给所有路由增加'methods': ['GET', 'POST']参数。不用每个都写
 class ZyzBlueprint(Blueprint):
-    def __init__(self, name, import_name, default_methods=DEFAULT_METHODS,
+    def __init__(self, name, import_name, default_methods=None,
                  static_folder=None,static_url_path=None, template_folder=None,
                  url_prefix=None, subdomain=None, url_defaults=None, root_path=None):
 
@@ -448,6 +447,3 @@ def get_version(request):
     except AttributeError:
         pass
     return request.args.get('version')
-
-app = ZyzFlask(__name__)
-app.config.from_object()

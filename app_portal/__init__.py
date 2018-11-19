@@ -1,27 +1,34 @@
-
+import logging.config
 from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy
+
 
 import configs
 from core.check_param import SubCheckParam, CheckParam
 from core.zyz_flask import ZyzFlask, ZyzBlueprint
+from configs import DEFAULT_METHODS
+
 
 app = ZyzFlask(__name__)
 app.config.from_object(configs)
 CORS(app)
+db = SQLAlchemy(app)
+
+logging.config.fileConfig('configs/logging.conf') # 这个路径是log日志，的配置文件的路径
+logger = logging.getLogger()
 
 
-DEFAULT_METHODS = ['POST','GET']
 check_param = CheckParam()
 
 
-root = ZyzBlueprint('root', __name__)
-inner = ZyzBlueprint('inner', __name__)
-outer = ZyzBlueprint('outer', __name__)
-manager = ZyzBlueprint('manager', __name__)
-owner = ZyzBlueprint('owner', __name__)
-member = ZyzBlueprint('member', __name__)
-third = ZyzBlueprint('third', __name__)
-offline = ZyzBlueprint('offline', __name__)
+root = ZyzBlueprint('root', __name__,default_methods=DEFAULT_METHODS)
+inner = ZyzBlueprint('inner', __name__,default_methods=DEFAULT_METHODS)
+outer = ZyzBlueprint('outer', __name__,default_methods=DEFAULT_METHODS)
+manager = ZyzBlueprint('manager', __name__,default_methods=DEFAULT_METHODS)
+owner = ZyzBlueprint('owner', __name__,default_methods=DEFAULT_METHODS)
+member = ZyzBlueprint('member', __name__,default_methods=DEFAULT_METHODS)
+third = ZyzBlueprint('third', __name__,default_methods=DEFAULT_METHODS)
+offline = ZyzBlueprint('offline', __name__,default_methods=DEFAULT_METHODS)
 
 
 app.register_blueprint(root)

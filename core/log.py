@@ -5,12 +5,8 @@ import fcntl
 import shutil
 
 from stat import ST_MTIME
-from logging import getLogger, FileHandler, StreamHandler, config
+from logging import FileHandler, StreamHandler
 from logging.handlers import TimedRotatingFileHandler, RotatingFileHandler
-
-
-config.fileConfig('configs/logging.conf')
-logger = getLogger()
 
 
 class StreamHandler_MP(StreamHandler):
