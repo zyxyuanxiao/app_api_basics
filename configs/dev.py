@@ -1,0 +1,6 @@
+
+AUTH_COOKIE_AES_KEY = 'magicCube-moFang'
+
+REDIS_HOST = '10.0.3.6'
+REDIS_PORT = 6379
+REDIS_PASSWORD = 'SDOjx2HcHu'
