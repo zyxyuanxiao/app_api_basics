@@ -1,6 +1,8 @@
+import time
 import json
 import datetime
 import redis
+import hashlib
 
 from flask import make_response, request
 from Crypto.Cipher import AES
@@ -9,7 +11,7 @@ from binascii import b2a_hex, a2b_hex
 from core.common import get_trace_id
 
 from core.system_constant import REQUEST_FAIL, MOBILE_ORIGIN_URL
-from configs import AUTH_COOKIE_AES_KEY, REDIS_HOST, REDIS_PORT, REDIS_PASSWORD
+from configs import AUTH_COOKIE_AES_KEY, REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, AUTH_COOKIE_SPLIT, AUTH_COOKIE_KEY
 
 class BaseError(object):
     def __init__(self):
@@ -62,6 +64,16 @@ def create_auth_cookie(data, response, login, cookie=None):
 
             outData = datetime.datetime.today() + datetime.timedelta(days=30)
             aes_crypt = AesCrypt(AUTH_COOKIE_AES_KEY)  # 初始化密钥
+            cookie_info = aes_crypt.encrypt(json.dumps(cookie_info))
+
+            refresh_time = str(int(round(time.time() * 1000)))
+            auth_token = aes_crypt.encrypt(str(user_id) + AUTH_COOKIE_SPLIT + hashlib.md5(
+                AUTH_COOKIE_KEY + str(user_id) + refresh_time).hexdigest())
+
+            response.set_cookie('auth_token',auth_token, path='/',domain='.mofanghr.com',expires=outData)
+            response.set_cookie('refresh_time',str(refresh_time),path='/',domain='.mofanghr.com',expires=outData)
+            response.set_cookie('cookie_info',cookie_info)
+
 
 
 
@@ -148,14 +160,24 @@ class Redis(object):
         self.get_server().llen(name)
 
     def set_sadd(self, name, value):
+        # 集合中增加元素
         self.get_server().sadd(name, value)
 
-    def set_srem(self, name, value):
-        self.get_server().srem(name, value)
+    def delete_srem(self, name, *value):
+        # 删除集合中的一个或多个元素
+        self.get_server().srem(name, *value)
 
-    def srem_variable(self, name, *values):
-        # 移除集合 key 中的一个或多个 member 元素，不存在的 member 元素会被忽略。
-        return self.get_server().srem(name, *values)
+    def spop(self, name):
+        # 随机移除集合中的一个元素并返回
+        return self.get_server().spop(name)
 
+    def smembers(self, name):
+        return self.get_server().smembers(name)
 
+    def sismember(self, name, value):
+        # 判断value是否是集合name中的元素。是返回1 ，不是返回0
+        return self.get_server().sismember(name,value)
 
+    def expire(self,name,time):
+        # 设置key的过期时间
+        self.get_server().expire(name,time)
