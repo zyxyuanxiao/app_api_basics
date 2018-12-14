@@ -1,6 +1,6 @@
 
-AUTH_COOKIE_AES_KEY = 'magicCube-moFang-d'
-AUTH_COOKIE_SPLIT = '#$%'
+AES_KEY = 'magicCube-moFang-d'
+
 AUTH_COOKIE_KEY = 'moFangHr-d'
 
 
