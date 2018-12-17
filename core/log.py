@@ -3,6 +3,9 @@ import re
 import time
 import fcntl
 import shutil
+import logging.config
+
+from configs import LOGGING_PATH
 
 from stat import ST_MTIME
 from logging import FileHandler, StreamHandler
@@ -228,3 +231,6 @@ class TimedRoeatingFileHandler_MP(TimedRotatingFileHandler, FileHandler_MP):
             raise
         except:
             self.handleError(record)
+
+logging.config.fileConfig(LOGGING_PATH) # 这个路径是log日志，的配置文件的路径
+logger = logging.getLogger()

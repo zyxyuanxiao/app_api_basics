@@ -1,24 +1,18 @@
-import logging.config
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 
 
 import configs
-from core.check_param import SubCheckParam, CheckParam
+from core.check_param import SubCheckParam
 from core.zyz_flask import ZyzFlask, ZyzBlueprint
 from configs import DEFAULT_METHODS
+from core.core import check_param
 
 
 app = ZyzFlask(__name__)
 app.config.from_object(configs)
 CORS(app)
 db = SQLAlchemy(app)
-
-logging.config.fileConfig('configs/logging.conf') # 这个路径是log日志，的配置文件的路径
-logger = logging.getLogger()
-
-
-check_param = CheckParam()
 
 
 root = ZyzBlueprint('root', __name__,default_methods=DEFAULT_METHODS)

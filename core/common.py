@@ -11,8 +11,10 @@ def get_trace_id():
     except Exception:
         return uuid.uuid1()
 
+
 def is_none(arg):
     return not arg or str(arg) in ['null','none','false']
+
 
 def get_version(request):
     try:

@@ -1,18 +1,22 @@
 import time
 import json
-import datetime
 import redis
 import hashlib
 
+from functools import wraps
 from flask import make_response, request
 
 from configs import *
+from core.log import logger
 from core.utils import get_randoms, AesCrypt, get_hashlib
 from core.common import get_trace_id, is_none, get_version
 
-from core.global_settings import REQUEST_FAIL, MOBILE_ORIGIN_URL
+from core.global_settings import MOBILE_ORIGIN_URL, METHODS
+from core.check_param import build_check_rule, CheckParam
 
 from configs import AES_KEY, REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, AUTH_COOKIE_KEY
+
+check_param = CheckParam()
 
 class BaseError(object):
     def __init__(self):
@@ -20,18 +24,27 @@ class BaseError(object):
 
     @staticmethod
     def not_login():
-        data = json.dumps({
-            'traceID': get_trace_id(),
-            'code': 401,
-            'msg': '用户未登录'
-        })
-        response = make_response(data,401)
-        return response
+        return return_data(code=-401, msg='用户未登录')
+
+    @staticmethod
+    def not_local_login():
+        return return_data(code=-402, msg='您的帐号已在其他设备上登录\n请重新登录')
+
+    @staticmethod
+    def system_exception():
+        return return_data(code=-1, msg='后台系统异常')
 
     @staticmethod
     def request_params_incorrect():
-        return return_data(code=REQUEST_FAIL, msg=u'请求参数不正确')
+        return return_data(code=-1, msg='请求参数不正确')
 
+
+class BusinessException(Exception):
+    def __init__(self, code=None, msg=None, func=None, url=None):
+        self.code = code
+        self.msg = msg
+        self.func = func
+        self.url = url
 
 
 class Redis(object):
@@ -136,47 +149,39 @@ class LoginAndReturn(object):
 
 
 def login_required_one(f):
-    @wraps(f)
+    @wraps(f) #  不改变使用装饰器原有函数的结构(如__name__, __doc__)
     def decorated_function(*args, **kw):
         #### 所有注释都是进行单点登录操作的 !!!!!!!
-        auth_token = request.cookies.get('app_auth_token')
-        refresh_time = request.cookies.get('app_refresh_time')
+        auth_token = request.cookies.get('auth_token')
+        refresh_time = request.cookies.get('refresh_time')
+        user_id = get_cookie_info().get('user_id')  # 这个个方法里存在单点登录状态
+        sso_code = get_cookie_info().get('sso_code')
 
-        if auth_token is None and refresh_time is None:
-            return BaseError.not_local_login()
-
-        aes_crypt = AesCrypt(AES_KEY)  # 初始化密钥
-        auth_token = aes_crypt.decrypt(auth_token)
-
-        user_id = get_user_id_by_cookie_new(auth_token) # 这个个方法里存在单点登录状态
-
-        only_code = get_only_code_by_cookie(auth_token)
-
+        if is_none(auth_token) or is_none(refresh_time) or is_none(user_id):
+            return BaseError.not_login()
         # 去redis中取 组装cookie时存的随机数
         _redis = Redis()
-        _only_code = _redis.get_hget("app_only_code", user_id)
-
-        user_id = get_user_id_by_cookie(auth_token)
-
-        if user_id is None or user_id == 'None':
-            return BaseError.not_login()
+        _sso_code = _redis.get_hget("app_sso_code", user_id)
 
         # 校验cookie解析出来的随机数 和存在redis中的随机数是否一致
-        if _only_code and only_code != _only_code:
+        if not is_none(_sso_code) and not is_none(sso_code) and sso_code != _sso_code:
             logger.info("账号在其他设备登陆了%s"% user_id)
             return BaseError.not_local_login()
 
-        # 利用user_id + '#$%' + redis中随机数 + '#$%' + md5加密后的字符串 组装auth_token
-        auth_cookie = hashlib.sha1(AUTH_COOKIE_KEY + user_id + refresh_time).hexdigest()
-        if auth_token == auth_cookie:
+        # 解密auth_token中的sign
+        sign = aes_decrypt(auth_token)
+        # 利用user_id + '#$%' + redis中随机数 + '#$%' + md5加密后的字符串 组装_sign
+        _sign = hashlib.sha1(AUTH_COOKIE_KEY + user_id + refresh_time + sso_code).hexdigest()
+        if sign == _sign:
             return f(*args, **kw)
         else:
             return BaseError.not_login()
 
     return decorated_function
 
+
 # 制作response并返回的函数,包括制作response的请求头和请求体
-#   login_data : 登录操作时必传参数，必须包括userID，其余可以包括想带入cookie中的参数 格式{“userID”:“12345”}
+#   login_data : 登录操作时必传参数，必须包括user_id，其余可以包括想带入cookie中的参数 格式{“user_id”:“12345”}
 def return_data(code=200, data=None, msg=u'成功', login_data=None):
     data = {} if data is None else data
     data_json = json.dumps({'traceID': get_trace_id(),
@@ -204,27 +209,25 @@ def create_auth_cookie(response, login_data):
     cookie_info = request.cookies.get('cookie_info')
 
     # 设置cookie过期时间点， time.time() + 60 表示一分钟后
-    outdate = time.time() + 60 * 60 * 24 * 3  # 记录登录态三天
-    user_id = None
-
+    outdate = time.time() + 60 * 60 * 24 * 30  # 记录登录态三天
+    _redis = Redis()
     #login 如果是登录操作，cookie中所有信息重新生成
-    if not is_none(login_data)  and not is_none(login_data.get('userID')):
-        user_id = login_data.get('userID')
+    if not is_none(login_data)  and not is_none(login_data.get('user_id')):
+        user_id = login_data.get('user_id')
 
         sso_code = "vJjPtawUC8" # 如果当前版本不设置单点登录，则使用固定随机码
         if get_version(request) in SSO_VERSION:
             # 如果版本设置单点登录,随机生成10位随机数，当做单机唯一登录码，存在redis中方便对比
             # 只要不清除登录态，单点登录则不会触发
             sso_code = get_randoms(10)
-            _redis = Redis()
             _redis.set_hset("app_sso_code", user_id, sso_code)
 
         # 产生新的refresh_time 和新的auth_token
         refresh_time = str(int(round(time.time() * 1000)))
-        sign_str = get_hashlib(AUTH_COOKIE_KEY + user_id + refresh_time + sso_code)
-        auth_token = aes_crypt_encrypt(AUTH_COOKIE_KEY + sign_str)
-        cookie_info = aes_crypt_encrypt(json.dumps(login_data))
-
+        sign = get_hashlib(AUTH_COOKIE_KEY + user_id + refresh_time + sso_code)
+        auth_token = aes_encrypt(sign)
+        login_data['sso_code'] = sso_code
+        cookie_info = aes_encrypt(json.dumps(login_data))
 
     #not login 如果不是登录操作，并且cookie中auth_token和refresh_time存在
     if not is_none(auth_token) and  not is_none(refresh_time):
@@ -232,19 +235,31 @@ def create_auth_cookie(response, login_data):
         differ_minuts = (now_time - int(refresh_time)) / (60*1000)
 
         if differ_minuts >= 30 and is_none(login_data):
-            user_id = get_info_by_authToken(auth_token).get('user_id')
-            sso_code = get_info_by_authToken(auth_token).get('sso_code') #获取单点登录码
-
-
+            user_id = get_cookie_info().get('user_id')
             if not is_none(user_id):
                 refresh_time = str(int(round(time.time() * 1000)))
-                auth_token = generate_token(user_id, refresh_time,sso_code)
+                sso_code = _redis.get_hget("app_sso_code", user_id)  # 获取单点登录码
+                sign = get_hashlib(AUTH_COOKIE_KEY + user_id + refresh_time + sso_code)
+                auth_token = aes_encrypt(sign)
 
-                response.set_cookie('auth_token', auth_token)
-                response.set_cookie('refresh_time', str(refresh_time))
-
+    response.set_cookie('auth_token', auth_token, path='/', domain='.mofanghr.com', expires=outdate)
+    response.set_cookie('refresh_time', str(refresh_time), path='/', domain='.mofanghr.com', expires=outdate)
+    response.set_cookie('cookie_info', cookie_info, path='/', domain='.mofanghr.com', expires=outdate)
     return response
 
+
+def request_check(func):
+    @wraps(func)
+    def decorator(*args, **kw):
+        try:
+            # 校验参数
+            check_rule = build_check_rule(str(request.url_rule),get_version(request),
+                                          list(request.url_rule.methods & set(METHODS)))
+            check_func = check_param.get_check_rules().get(check_rule)
+            if check_func:
+                check_func(*args, **kw)
+        except BusinessException as e:
+            pass
 
 def get_sign(auth_token):
     if auth_token is not None:
@@ -255,7 +270,30 @@ def get_sign(auth_token):
 
 
 # 使用AES算法对字符串进行加密
-def aes_crypt_encrypt(text):
+def aes_encrypt(text):
     aes_crypt = AesCrypt(AES_KEY)  # 初始化密钥
-    encrypt = aes_crypt.encrypt(text) # 加密字符串
-    return encrypt
+    encrypt_text = aes_crypt.encrypt(text) # 加密字符串
+    return encrypt_text
+
+
+# 使用AES算法对字符串进行解密
+def aes_decrypt(text):
+    aes_crypt = AesCrypt(AES_KEY)  # 初始化密钥
+    decrypt_text = aes_crypt.decrypt(text) # 解密成字符串
+    return decrypt_text
+
+
+# 获取并解析cookie_info
+def get_cookie_info():
+    req_cookie = request.cookies.get('cookie_info')
+    if req_cookie is not None:
+        try:
+            aes_crypt = AesCrypt(AES_KEY)  # 初始化密钥
+            aes_crypt_cookie = aes_crypt.decrypt(req_cookie)
+            req_cookie = json.loads(aes_crypt_cookie)
+            return req_cookie
+        except:
+            return {}
+    else:
+        return {}
+
