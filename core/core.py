@@ -2,19 +2,23 @@ import time
 import json
 import redis
 import hashlib
+import requests
+import traceback
+import urllib.parse
 
 from functools import wraps
 from flask import make_response, request
 
-from configs import *
 from core.log import logger
 from core.utils import get_randoms, AesCrypt, get_hashlib
 from core.common import get_trace_id, is_none, get_version
 
-from core.global_settings import MOBILE_ORIGIN_URL, METHODS
+from core.global_settings import *
+from core.exceptions import BusinessException
 from core.check_param import build_check_rule, CheckParam
 
-from configs import AES_KEY, REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, AUTH_COOKIE_KEY
+from configs import AES_KEY, REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, AUTH_COOKIE_KEY, SSO_VERSION, \
+    CALL_SYSTEM_ID
 
 check_param = CheckParam()
 
@@ -24,27 +28,20 @@ class BaseError(object):
 
     @staticmethod
     def not_login():
-        return return_data(code=-401, msg='用户未登录')
+        return return_data(code=LOGIN_FAIL, msg='用户未登录')
 
     @staticmethod
     def not_local_login():
-        return return_data(code=-402, msg='您的帐号已在其他设备上登录\n请重新登录')
+        return return_data(code=OTHER_LOGIN_FAIL, msg='您的帐号已在其他设备上登录\n请重新登录')
 
     @staticmethod
     def system_exception():
-        return return_data(code=-1, msg='后台系统异常')
+        return return_data(code=REQUEST_FAIL, msg='后台系统异常')
 
     @staticmethod
     def request_params_incorrect():
-        return return_data(code=-1, msg='请求参数不正确')
+        return return_data(code=REQUEST_FAIL, msg='请求参数不正确')
 
-
-class BusinessException(Exception):
-    def __init__(self, code=None, msg=None, func=None, url=None):
-        self.code = code
-        self.msg = msg
-        self.func = func
-        self.url = url
 
 
 class Redis(object):
@@ -148,7 +145,7 @@ class LoginAndReturn(object):
         pass
 
 
-def login_required_one(f):
+def login_required(f):
     @wraps(f) #  不改变使用装饰器原有函数的结构(如__name__, __doc__)
     def decorated_function(*args, **kw):
         #### 所有注释都是进行单点登录操作的 !!!!!!!
@@ -251,22 +248,41 @@ def create_auth_cookie(response, login_data):
 def request_check(func):
     @wraps(func)
     def decorator(*args, **kw):
+        # 校验参数
         try:
-            # 校验参数
             check_rule = build_check_rule(str(request.url_rule),get_version(request),
                                           list(request.url_rule.methods & set(METHODS)))
             check_func = check_param.get_check_rules().get(check_rule)
             if check_func:
                 check_func(*args, **kw)
         except BusinessException as e:
-            pass
+            if not is_none(e.func):
+                return e.func
+            elif not is_none(e.code) and not is_none(e.msg):
+                business_exception_log(e)
+                return return_data(code=e.code, msg=e.msg)
+        # 监听抛出的异常
+        try:
+            if request.trace_id is not None and request.full_path is not None:
+                logger.info('trace_id is:' + request.trace_id + ' request path:' + request.full_path)
 
-def get_sign(auth_token):
-    if auth_token is not None:
-        auth_tokens = auth_token.split(AUTH_COOKIE_KEY)
-        if len(auth_tokens) == 2:
-            return auth_tokens[0]
-    return None
+            return func(*args, **kw)
+        except BusinessException as e:
+            if e.func is not None:
+                return e.func()
+            elif e.code is not None and e.msg is not None:
+                business_exception_log(e)
+                if e.code == SYSTEM_CODE_404 or e.code == SYSTEM_CODE_503:
+                    return return_data(code=e.code, msg='很抱歉服务器异常，请您稍后再试')
+                else:
+                    return return_data(code=e.code, msg=e.msg)
+            else:
+                return request_fail()
+        except Exception:
+            return request_fail()
+
+    return decorator
+
 
 
 # 使用AES算法对字符串进行加密
@@ -297,3 +313,120 @@ def get_cookie_info():
     else:
         return {}
 
+
+def business_exception_log(e):
+    if not is_none(request.trace_id) and not is_none(request.full_path):
+        logger.error('BusinessException, code: %s, msg: %s trace_id: %s request path: %s' % (e.code, e.msg, request.trace_id, request.full_path))
+    else:
+        logger.error('BusinessException, code: %s, msg: %s' % (e.code, e.msg))
+
+
+def request_fail(func=BaseError.system_exception):
+    if not is_none(request.trace_id):
+        logger.error('request fail trace id is:' + str(request.trace_id))
+    logger.error(traceback.format_exc())
+    return func()
+
+
+# 工厂模式，根据不同的后端项目域名生成不同的项目对象,传入request_api中组成接口
+# 针对不同的后端服务项目，实例化后生成不同的service对象
+#       有三个属性 service.url  后端项目的域名 || "http://user.service.mofanghr.com/"
+#                service.params  项目通用普通参数，放在params中  || {“userID”:"12345"}
+#                service.common_params  项目通用公共参数，拼在url问号？后面 || {“userID”:"12345"}
+class Service_api(object):
+    def __init__(self,url,params=None,common_params=None):
+        self.url = url
+        self.params = params
+        self.common_params = common_params
+
+    def __str__(self):
+        return self.url
+
+
+# 工厂模式，根据传如的不同项目加上不同的后端接口生成不同的接口函数,请求接口并处理返回值
+# base_prj 针对不同的后端服务项目，实例化后的service对象，
+#       有三个属性 base_prj.url  后端项目的域名 || "http://user.service.mofanghr.com/"
+#                base_prj.params  项目通用普通参数，放在params中  || {“userID”:"12345"}
+#                base_prj.common_params  项目通用公共参数，拼在url问号？后面 || {“userID”:"12345"}
+#
+# fixUrl 接口的后缀url，拼在项目域名后，形成完整的访问接口
+# baseParams 如果同一个接口需要增加相同的参数，可以放在baseParams中，增加拓展性 || {‘reqSource’:‘Mf1.0’}
+class Requests_api(object):
+    def __init__(self, base_prj, fixUrl, baseParams=None):
+        self.base_prj = base_prj
+        self.url = base_prj.url + fixUrl
+        self.baseParams = baseParams
+
+
+    # 执行请求后端的函数,get请求
+    # fixUrl 同一个项目下的不同接口后缀 || inner/careerObjective/get.json
+    # params 访问携带参数  || {“userID”:"12345"}
+    def implement_get(self, params, **kwargs):
+        self.url_add_common_param()
+        self.url_add_business_param(params)
+        logger.info(self.url)
+        resp = requests.get(self.url, **kwargs)
+        if resp.status_code == 200:
+            ret_data = resp.json()
+        else:
+            raise BusinessException(code=resp.status_code, msg=resp.text, url=resp.url)
+        # 如果请求成功，但是后端返回的code不是200，则记录日志
+        if 'code' not in ret_data or ret_data.get('code') != 200:
+            logger.error(
+                'api_return_error, code: %s, msg: %s, url: %s' % (ret_data.get('code'), ret_data.get('msg'), self.url))
+
+        return ret_data
+
+
+    # 执行请求后端的函数,post请求
+    # headers 请求头，如果有特殊的请求头要求，可以使用||{'Content-Type': 'application/json;charset=utf-8'}
+    def implement_post(self, params, headers=None,**kwargs):
+
+        self.url_add_common_param()
+        params = {'params':json.dumps(params)}
+        resp = requests.post(self.url, data=params, headers=headers, **kwargs)
+        logger.info(self.url)
+        if resp.status_code == 200:
+            ret_data = resp.json()
+        else:
+            raise BusinessException(code=resp.status_code, msg=resp.text, url=resp.url)
+        if 'code' not in ret_data or ret_data.get('code') != 200:
+            logger.error(
+                'api_return_error, code: %s, msg: %s, url: %s' % (ret_data.get('code'), ret_data.get('msg'), self.url))
+
+        return ret_data
+
+
+    # 格式化params，并组装URL的函数，将参数值转化为url编码拼接到self.url后面
+    # self.url http://user.service.mofanghr.com/inner/crm/getSessionAndJobList.json?params=%22%3a+%22jobStandardCardID%24%
+    def url_add_business_param(self, params):
+        # 如果存在需要整个项目传的参数，则增加进params中
+        if not is_none(self.base_prj.params):
+            for _service_key in self.base_prj.params:
+                params[_service_key] =self.base_prj.params.get(_service_key)
+
+        # 如果存在需要整个接口传的参数，则增加进params中
+        if not is_none(self.baseParams):
+            for _key in self.baseParams:
+                params[_key] = self.baseParams.get(_key)
+        self.url = self.url + '&params=' + urllib.parse.quote_plus(json.dumps(params))
+
+
+    # 给URL增加公共参数，所有接口都会有的参数
+    # self.base_prj.common_params 个性化公共参数，个别接口可以根据需求自行添加 || {“serviceName”:“send”}
+    def url_add_common_param(self):
+        self.url = self.url + '?traceID=' + get_trace_id() + '&callSystemID=' + str(CALL_SYSTEM_ID)
+
+        if not is_none(self.base_prj.common_params):
+            for key,value in self.base_prj.common_params.items():
+                self.url = self.url + "&" + str(key) + "=" + str(value)
+
+    def __str__(self):
+        return self.url
+
+
+# 例子
+SEARCH_API_URL = Service_api("SEARCH_API_URL", common_params={"callSystemID":str(CALL_SYSTEM_ID)}) # 每个service实例化一个
+job_search = Requests_api(SEARCH_API_URL,"inner/all/job/search.json") # 每个接口实例化一个
+
+result = job_search.implement_get({"userID":"12345"}) # 前端函数中使用

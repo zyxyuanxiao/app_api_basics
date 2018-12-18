@@ -1,3 +1,11 @@
+
+class BusinessException(Exception):
+    def __init__(self, code=None, msg=None, func=None, url=None):
+        self.code = code
+        self.msg = msg
+        self.func = func
+        self.url = url
+
 class PermissionDenied(Exception):
     """The user did not have permission to do that"""
     pass
