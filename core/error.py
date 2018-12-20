@@ -301,8 +301,3 @@ class Error(BaseError):
     @staticmethod
     def upload_number_error():
         return return_data(code=-169, msg=u'上传简历数量超过限制')
-
-    #  通用错误
-    @staticmethod
-    def apply_error(code, msg):
-        return return_data(code=code, msg=msg + u'获取信息失败！')
