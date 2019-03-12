@@ -42,6 +42,14 @@ class BaseError(object):
     def request_params_incorrect():
         return return_data(code=REQUEST_FAIL, msg='请求参数不正确')
 
+    @staticmethod
+    def common_feild_null(feild):
+        raise BusinessException(code=-99, msg=feild + '不能为空')
+
+    @staticmethod
+    def common_feild_wrong(feild):
+        raise BusinessException(code=-99, msg=feild + '错误')
+
 
 
 class Redis(object):
@@ -213,7 +221,7 @@ def create_auth_cookie(response, login_data):
         user_id = login_data.get('user_id')
 
         sso_code = "vJjPtawUC8" # 如果当前版本不设置单点登录，则使用固定随机码
-        if get_version(request) in SSO_VERSION:
+        if get_version() in SSO_VERSION:
             # 如果版本设置单点登录,随机生成10位随机数，当做单机唯一登录码，存在redis中方便对比
             # 只要不清除登录态，单点登录则不会触发
             sso_code = get_randoms(10)
@@ -250,7 +258,7 @@ def request_check(func):
     def decorator(*args, **kw):
         # 校验参数
         try:
-            check_rule = build_check_rule(str(request.url_rule),get_version(request),
+            check_rule = build_check_rule(str(request.url_rule),str(request.rule_version),
                                           list(request.url_rule.methods & set(METHODS)))
             check_func = check_param.get_check_rules().get(check_rule)
             if check_func:
@@ -426,7 +434,7 @@ class Requests_api(object):
 
 
 # 例子
-SEARCH_API_URL = Service_api("SEARCH_API_URL", common_params={"callSystemID":str(CALL_SYSTEM_ID)}) # 每个service实例化一个
-job_search = Requests_api(SEARCH_API_URL,"inner/all/job/search.json") # 每个接口实例化一个
-
-result = job_search.implement_get({"userID":"12345"}) # 前端函数中使用
+# SEARCH_API_URL = Service_api("http://search.service.mofanghr.com/", common_params={"callSystemID":str(CALL_SYSTEM_ID)}) # 每个service实例化一个
+# job_search = Requests_api(SEARCH_API_URL,"inner/all/job/search.json") # 每个接口实例化一个
+#
+# result = job_search.implement_get({"userID":"12345"}) # 前端函数中使用
