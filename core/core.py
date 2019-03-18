@@ -247,9 +247,9 @@ def create_auth_cookie(response, login_data):
                 sign = get_hashlib(AUTH_COOKIE_KEY + user_id + refresh_time + sso_code)
                 auth_token = aes_encrypt(sign)
 
-    response.set_cookie('auth_token', auth_token, path='/', domain='.mofanghr.com', expires=outdate)
-    response.set_cookie('refresh_time', str(refresh_time), path='/', domain='.mofanghr.com', expires=outdate)
-    response.set_cookie('cookie_info', cookie_info, path='/', domain='.mofanghr.com', expires=outdate)
+    response.set_cookie('auth_token', value=auth_token, domain='.mofanghr.com', expires=outdate, secure=True, httponly=True, samesite='Lax')
+    response.set_cookie('refresh_time', value=str(refresh_time), domain='.mofanghr.com', expires=outdate)
+    response.set_cookie('cookie_info', value=cookie_info, domain='.mofanghr.com', expires=outdate)
     return response
 
 

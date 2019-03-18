@@ -13,7 +13,9 @@ def get_randoms(num):
 
 
 def get_hashlib(text):
-    return hashlib.sha1(text).hexdigest()
+    s = hashlib.sha1()
+    s.update(text.encode("utf8"))
+    return s.hexdigest()
 
 
 class AesCrypt(object):

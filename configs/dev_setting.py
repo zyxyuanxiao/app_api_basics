@@ -1,5 +1,5 @@
 
-AES_KEY = 'magicCube-moFang-d'
+AES_KEY = 'magicCube-moFa-d'
 
 AUTH_COOKIE_KEY = 'moFangHr-d'
 
@@ -12,3 +12,8 @@ REDIS_PASSWORD = 'SDOjx2HcHu'
 SQLALCHEMY_DATABASE_URI = 'postgresql://mftest:mftest@10.0.3.7:5432/mofang_mobile'
 SQLALCHEMY_POOL_SIZE = 50
 SQLALCHEMY_TRACK_MODIFICATIONS = True
+
+
+SESSION_COOKIE_SECURE=True,
+SESSION_COOKIE_HTTPONLY=True,
+SESSION_COOKIE_SAMESITE='Lax',
